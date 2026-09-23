@@ -1,40 +1,37 @@
-//
-//  VideoOutputDelegate.swift
-//  HandKit
-//
-//  Created by Carolane Lefebvre on 19/09/2026.
-//
-
 import AVFoundation
 import CoreMedia
 import Vision
 
-/// Receives video frames captured by AVFoundation
-/// and forwards their image data for hand-pose analysis.
 nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    
+    // MARK: - Vision
+
     private let handPoseRequest: VNDetectHumanHandPoseRequest = {
         let request = VNDetectHumanHandPoseRequest()
         request.maximumHandCount = 1
         return request
-    }() // () -> immediate execution to onbtain property's value
-    
-    private var previousPosition: CGPoint? = nil
+    }()
+
+    // MARK: - Movement
+
+    private var previousPosition: CGPoint?
     private var recentMovementDistances: [CGFloat] = []
-    
-    // movement state properties
-    private var startPosition: CGPoint? = nil
-    private let clock = ContinuousClock()
-    private var startTime: ContinuousClock.Instant? = nil
-    
-    // brightness
-    private var brightness: CGFloat = 50
+
+    private var movementState: MovementState = .idle
+
+    private var startPosition: CGPoint?
     private var startBrightness: CGFloat?
-    
-    // slider in SwiftUI
+
+    private var currentBrightness: CGFloat = 0
+
+    // MARK: - Pinch
+
+    private var pinchState: PinchState = .open
+
+    // MARK: - Outputs
+
     private let onBrightnessChanged: @Sendable (CGFloat) -> Void
     private let onToggle: @Sendable () -> Void
-    
+
     init(
         onBrightnessChanged: @escaping @Sendable (CGFloat) -> Void,
         onToggle: @escaping @Sendable () -> Void
@@ -44,31 +41,23 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
 
         super.init()
     }
-    //MARK: - movement state
-    private var movementState: MovementState = .idle
-    
-    enum MovementState {
-        case idle
-        case moving
+
+    // MARK: - External synchronization
+
+    func updateCurrentBrightness(_ brightness: CGFloat) {
+        currentBrightness = min(max(brightness, 0), 100)
     }
-    
-    private var pinchState: PinchState = .open
-    
-    enum PinchState {
-        case open
-        case pinched
-    }
-    
-    //MARK: - methods
-    
-    /// Called by AVFoundation whenever a new video frame is captured.
-    /// Extracts the image buffer that will be analyzed by Vision.
+
+    // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+
     func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+        guard let pixelBuffer =
+            CMSampleBufferGetImageBuffer(sampleBuffer)
+        else {
             return
         }
 
@@ -82,8 +71,9 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
             print("Hand pose processing failed:", error)
         }
     }
-    
-    //MARK: - private methods
+
+    // MARK: - Vision
+
     private func detectHand(
         in pixelBuffer: CVPixelBuffer
     ) throws -> VNHumanHandPoseObservation? {
@@ -97,33 +87,38 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
 
         return handPoseRequest.results?.first
     }
-    
+
     private func processHand(
         _ hand: VNHumanHandPoseObservation
     ) throws {
         let indexTip = try hand.recognizedPoint(.indexTip)
         let thumbTip = try hand.recognizedPoint(.thumbTip)
 
-        guard indexTip.confidence >= 0.7,
-              thumbTip.confidence >= 0.7 else {
+        guard
+            indexTip.confidence >= 0.7,
+            thumbTip.confidence >= 0.7
+        else {
+            return
+        }
+
+        let isPinching = processPinch(
+            indexPosition: indexTip.location,
+            thumbPosition: thumbTip.location
+        )
+
+        if isPinching {
+            cancelMovement()
             return
         }
 
         processMovement(at: indexTip.location)
-        processPinch(indexPosition: indexTip.location, thumbPosition: thumbTip.location)
     }
-    
-    private func processPinch(
-        indexPosition: CGPoint,
-        thumbPosition: CGPoint
+
+    // MARK: - Movement
+
+    private func processMovement(
+        at currentPosition: CGPoint
     ) {
-        let deltaX = indexPosition.x - thumbPosition.x
-        let deltaY = indexPosition.y - thumbPosition.y
-        let distance = hypot(deltaX, deltaY)
-        handlePinch(distance: distance)
-    }
-    
-    private func processMovement(at currentPosition: CGPoint) {
         guard let previous = previousPosition else {
             previousPosition = currentPosition
             return
@@ -132,10 +127,8 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
         let deltaX = currentPosition.x - previous.x
         let deltaY = currentPosition.y - previous.y
 
-        // Distance traveled by the index between two consecutive frames
         let movementDistance = hypot(deltaX, deltaY)
 
-        // Sliding window containing the five most recent movement distances
         recentMovementDistances.append(movementDistance)
 
         if recentMovementDistances.count > 5 {
@@ -148,7 +141,6 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
             return
         }
 
-        // Median reduces the influence of isolated tracking errors
         let sortedDistances = recentMovementDistances.sorted()
         let medianMovement = sortedDistances[2]
 
@@ -166,40 +158,75 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
         case .idle:
             if medianMovement > 0.01 {
                 startPosition = currentPosition
-                startBrightness = brightness
-                startTime = clock.now
+                startBrightness = currentBrightness
 
                 movementState = .moving
             }
 
         case .moving:
-            guard let startPosition,
-                  let startBrightness else {
+            guard
+                let startPosition,
+                let startBrightness
+            else {
                 return
             }
 
-            // Horizontal movement since the beginning of the gesture
-            let deltaX = currentPosition.x - startPosition.x
+            let deltaX =
+                currentPosition.x - startPosition.x
 
-            // Convert normalized movement into brightness percentage
-            let sensitivity: CGFloat = 200
-            let brightnessDelta = deltaX * sensitivity
+            let sensitivity: CGFloat = 100
 
-            let newBrightness = startBrightness + brightnessDelta
-            brightness = min(max(newBrightness, 0), 100)
-            
-            onBrightnessChanged(brightness)
+            let brightnessDelta =
+                deltaX * sensitivity
 
-            // End the gesture once the finger becomes stable again
+            let newBrightness =
+                startBrightness + brightnessDelta
+
+            let clampedBrightness =
+                min(max(newBrightness, 0), 100)
+
+            currentBrightness = clampedBrightness
+
+            onBrightnessChanged(clampedBrightness)
+
             if medianMovement < 0.005 {
                 movementState = .idle
+
                 self.startPosition = nil
                 self.startBrightness = nil
-                self.startTime = nil
             }
         }
     }
     
+    private func cancelMovement() {
+        movementState = .idle
+        startPosition = nil
+        startBrightness = nil
+
+        recentMovementDistances.removeAll()
+        previousPosition = nil
+    }
+
+    // MARK: - Pinch
+
+    private func processPinch(
+        indexPosition: CGPoint,
+        thumbPosition: CGPoint
+    ) -> Bool {
+        let deltaX = indexPosition.x - thumbPosition.x
+        let deltaY = indexPosition.y - thumbPosition.y
+        let distance = hypot(deltaX, deltaY)
+
+        handlePinch(distance: distance)
+        switch pinchState {
+        case .open:
+            return false
+
+        case .pinched:
+            return true
+        }
+    }
+
     private func handlePinch(
         distance: CGFloat
     ) {
@@ -207,12 +234,15 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
         case .open:
             if distance < 0.015 {
                 pinchState = .pinched
+
+                // Only toggle when entering the pinched state.
                 onToggle()
             }
+
         case .pinched:
             if distance > 0.03 {
+                // Rearm without triggering another toggle.
                 pinchState = .open
-                onToggle()
             }
         }
     }

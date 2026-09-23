@@ -1,80 +1,80 @@
-//
-//  CameraManager.swift
-//  HandKit
-//
-//  Created by Carolane Lefebvre on 19/09/2026.
-//
-
-import Foundation
 import AVFoundation
 
 actor CameraManager {
+    // MARK: - Capture
+
     let session = AVCaptureSession()
-    
+
     private let sessionQueue = DispatchSerialQueue(label: "camera.session")
+
     private let frameQueue = DispatchSerialQueue(label: "frame.session")
+
     private let videoDataOutput = AVCaptureVideoDataOutput()
+
     private let videoOutputDelegate: VideoOutputDelegate
+
     private var isConfigured = false
-    
-    private let viewModel: CameraViewModel
-    
-    // nonisolated => savoir quel est l'executor de l'actor sans devoir entrer dans l'isolation de ce dernier
+
+    // MARK: - Executor
+
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        return sessionQueue.asUnownedSerialExecutor()
+        sessionQueue.asUnownedSerialExecutor()
     }
-    
+
+    // MARK: - Init
+
     init(
-        viewModel: CameraViewModel,
+        onBrightnessChanged: @escaping @Sendable (CGFloat) -> Void,
         onToggle: @escaping @Sendable () -> Void
     ) {
-        self.viewModel = viewModel
-
-        self.videoOutputDelegate = VideoOutputDelegate(
-            onBrightnessChanged: { newBrightness in
-                Task { @MainActor in
-                    viewModel.brightness = newBrightness
-                }
-            },
+        videoOutputDelegate = VideoOutputDelegate(
+            onBrightnessChanged: onBrightnessChanged,
             onToggle: onToggle
         )
     }
-    
-    //MARK: - private methods
-    
+
+    // MARK: - Configuration
+
     private func configure() -> Bool {
-        // edit config session
         session.beginConfiguration()
-        
+
         defer {
             session.commitConfiguration()
         }
-        
-        // check si le video device existe et lequel
-        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
-              // crée l'input à partir du device
-              let videoDeviceInput = try? AVCaptureDeviceInput(device: videoDevice),
-              self.session.canAddInput(videoDeviceInput)
-        else { return false }
-                
-        // fait la liaison avec la session
+
+        guard
+            let videoDevice = AVCaptureDevice.default(
+                .builtInWideAngleCamera,
+                for: .video,
+                position: .front
+            ),
+            let videoDeviceInput =
+                try? AVCaptureDeviceInput(
+                    device: videoDevice
+                ),
+            session.canAddInput(videoDeviceInput)
+        else {
+            return false
+        }
+
         session.addInput(videoDeviceInput)
-        
-        guard session.canAddOutput(videoDataOutput) else { return false }
-        
-        // créer l'output pour recevoir les frames de la caméra
+
+        guard session.canAddOutput(videoDataOutput) else {
+            return false
+        }
+
         session.addOutput(videoDataOutput)
-        
+
         videoDataOutput.setSampleBufferDelegate(
             videoOutputDelegate,
             queue: frameQueue
         )
-        
+
         return true
     }
-    
-    // MARK: - methods
-    
+
+    // MARK: - Lifecycle
+
     func start() {
         if !isConfigured {
             isConfigured = configure()
@@ -88,14 +88,27 @@ actor CameraManager {
             session.startRunning()
         }
     }
-    
+
     func stop() {
         if session.isRunning {
             session.stopRunning()
         }
     }
-    
-    func attachPreviewLayer(_ previewLayer: AVCaptureVideoPreviewLayer) {
+
+    // MARK: - Preview
+
+    func attachPreviewLayer(
+        _ previewLayer: AVCaptureVideoPreviewLayer
+    ) {
         previewLayer.session = session
+    }
+
+    // MARK: - Brightness synchronization
+
+    func updateCurrentBrightness(
+        _ brightness: CGFloat
+    ) {
+        videoOutputDelegate
+            .updateCurrentBrightness(brightness)
     }
 }
