@@ -1,26 +1,28 @@
 
 # HandKit
 Control your lights with your hands.
-HandKit is a small iOS experiment I started with a simple question:
+HandKit started as a small iOS experiment with a simple question:
 > Could I use my iPhone's camera to control the lights in my room with hand gestures?
 Turns out, yes.
-The project uses the iPhone's front camera to track hand movements in real time, recognize simple gestures, and translate them into HomeKit actions.
+The project uses the iPhone's front camera or a local camera on Mac to track hand movements in real time, recognize simple gestures, and translate them into HomeKit actions.
+It now runs on iOS and on Mac through Mac Catalyst, with an interface for selecting one or more lights.
 
 ## What it can do
 HandKit currently supports two interactions:
 
-### Pinch to toggle a light
-Bring your thumb and index finger together to toggle a HomeKit light on or off.
+### Pinch to toggle selected lights
+Bring your thumb and index finger together to toggle the selected HomeKit lights as a group.
+If all selected lights with a power characteristic are on, the gesture turns them off. Otherwise, it turns them all on. An empty selection sends no commands.
 Instead of treating every frame as a new gesture, HandKit tracks the distance between both fingertips and uses a small state machine to detect the transition from an open hand to a pinch.
 This prevents a sustained pinch from repeatedly toggling the light.
 
 ### Slide to adjust brightness
 Move your index finger horizontally to control a brightness value from 0 to 100%.
-The movement is tracked continuously, filtered to reduce tracking noise, and mapped to a brightness value.
-The HomeKit brightness integration is still a work in progress.
+Movement detection is filtered to reduce noisy transitions, and the index finger's horizontal position is mapped to a brightness value.
+The value is sent to all selected lights that support brightness control. Tracking and gesture calibration are still experimental.
 
 ## Requirements
-- iOS device with a camera
+- An iOS device with a camera, or a Mac with a camera running the Mac Catalyst app
 - A HomeKit home
 - A HomeKit-compatible light for the smart-light features
 - Camera permission
@@ -49,19 +51,30 @@ The gesture algorithms and thresholds were developed experimentally by observing
 
 ## Status
 HandKit is an experiment and a work in progress.
-Currently:
-- [x] Front-camera capture
-- [x] Real-time hand pose detection
-- [x] Index finger tracking
-- [x] Tracking noise filtering
+
+Implemented:
+- [x] iOS front-camera capture
+- [x] Mac camera capture through Mac Catalyst
+- [x] Mac camera selection excluding iPhone Continuity Camera devices
+- [x] Real-time Vision hand pose detection
+- [x] Index finger and thumb tracking
+- [x] Movement-distance median filtering and hysteresis
 - [x] Continuous horizontal gesture tracking
-- [x] Visual brightness feedback
-- [x] Thumb/index pinch detection
-- [x] HomeKit accessory discovery
-- [x] Pinch → toggle a real HomeKit light
-- [ ] Gesture → real HomeKit brightness control
-- [ ] More robust gesture calibration
-- [ ] macOS camera support
+- [x] Thumb/index pinch detection with recovery after release
+- [x] HomeKit light discovery with stable device identifiers
+- [x] SwiftUI selection of one or more lights
+- [x] Pinch → shared power state for selected HomeKit lights
+- [x] Gesture → brightness control for selected compatible lights
+- [x] Observable ViewModel separating the interface from HomeKit
+- [x] Camera and light commands tested on iOS and Mac Catalyst
+
+Next steps:
+- [ ] More reliable hand tracking and gesture calibration
+- [ ] On-screen tracking points and gesture-state diagnostics
+- [ ] Core ML hand pose/action classification experiment
+- [ ] Visual brightness feedback with a 3D slider
+- [ ] Color control for compatible HomeKit lights
+- [ ] 3D color wheel
 
 ## License
 TBD
