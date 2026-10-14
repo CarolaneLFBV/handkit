@@ -1,36 +1,51 @@
 import SwiftUI
 
 struct ContentView: View {
-    private let cameraManager: CameraManager
-    private let lightController: LightController
+    @State private var viewModel: ViewModel
+    @State private var cameraManager: CameraManager
 
     init() {
         let lightController = LightController()
-
-        let cameraManager = CameraManager(
+        let viewModel = ViewModel(controller: lightController)
+        
+        _viewModel = State(initialValue: viewModel)
+        _cameraManager = State(initialValue: CameraManager(
             onBrightnessChanged: { brightness in
                 Task { @MainActor in
-                    lightController.setBrightness(brightness)
+                    viewModel.setBrightness(brightness)
                 }
             },
             onToggle: {
                 Task { @MainActor in
                     do {
-                        try await lightController.toggle()
+                        try await viewModel.toggle()
                     } catch {
                         print(error.localizedDescription)
                     }
                 }
             }
-        )
-        self.lightController = lightController
-        self.cameraManager = cameraManager
+        ))
     }
 
     var body: some View {
-        CameraPreview(
-            cameraManager: cameraManager
-        )
+        VStack {
+            CameraPreview(
+                cameraManager: cameraManager
+            )
+            
+            List(viewModel.lights) { light in
+                Button {
+                    viewModel.toggleSelection(for: light.id)
+                } label: {
+                    HStack {
+                        Text(light.name)
+                        if viewModel.selectedLightIDs.contains(light.id) {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        }
         .ignoresSafeArea()
         .task {
             await cameraManager.start()

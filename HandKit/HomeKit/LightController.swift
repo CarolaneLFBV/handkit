@@ -6,11 +6,8 @@ final class LightController: NSObject, HMHomeManagerDelegate {
     // MARK: - HomeKit
     private let homeManager = HMHomeManager()
     private(set) var lights: [LightDevice] = []
-    private(set) var selectedLightIDs: Set<UUID> = []
     
-    private var selectedLights: [LightDevice] {
-        lights.filter { selectedLightIDs.contains($0.id) }
-    }
+    var onLightsChanged: (([LightDevice]) -> Void)?
     
     // MARK: - State
     private(set) var isReady = false
@@ -22,14 +19,12 @@ final class LightController: NSObject, HMHomeManagerDelegate {
     }
     
     // MARK: - Init
-    
     override init() {
         super.init()
         homeManager.delegate = self
     }
     
     // MARK: - Discovery
-    
     func homeManagerDidUpdateHomes(_ manager: HMHomeManager) {
         var discoveredLights: [LightDevice] = []
         
@@ -71,21 +66,18 @@ final class LightController: NSObject, HMHomeManagerDelegate {
         }
         
         lights = discoveredLights
+        onLightsChanged?(lights)
     }
     
     // MARK: - HomeKit
-    func toggleSelection(for id: UUID) {
-        if selectedLightIDs.contains(id) {
-            selectedLightIDs.remove(id)
-        } else {
-            selectedLightIDs.insert(id)
-        }
+    func selectedLights(for ids: Set<UUID>) -> [LightDevice] {
+        lights.filter { ids.contains($0.id) }
     }
     
     // MARK: - Power
-    func toggle() async throws {
+    func toggle(for ids: Set<UUID>) async throws {
         var powerStates: [Bool] = []
-        let powerCharacteristics = selectedLights.compactMap({$0.powerCharacteristic})
+        let powerCharacteristics = selectedLights(for: ids).compactMap(\.powerCharacteristic)
         
         guard !powerCharacteristics.isEmpty else { return }
         
@@ -121,11 +113,12 @@ final class LightController: NSObject, HMHomeManagerDelegate {
     }
     
     // MARK: - Brightness
-    func setBrightness(_ brightness: CGFloat) {
+    func setBrightness(_ brightness: CGFloat, for ids: Set<UUID>) {
         let clampedBrightness = min(max(brightness, 0), 100)
         let value = NSNumber(value: Double(clampedBrightness))
+        let lights = selectedLights(for: ids)
         
-        for light in selectedLights {
+        for light in lights {
             guard let brightnessCharacteristic = light.brightnessCharacteristic else { continue }
             brightnessCharacteristic.writeValue(value) { error in
                 if let error {
