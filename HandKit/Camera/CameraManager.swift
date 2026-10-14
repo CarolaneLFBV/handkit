@@ -102,13 +102,4 @@ actor CameraManager {
     ) {
         previewLayer.session = session
     }
-
-    // MARK: - Brightness synchronization
-
-    func updateCurrentBrightness(
-        _ brightness: CGFloat
-    ) {
-        videoOutputDelegate
-            .updateCurrentBrightness(brightness)
-    }
 }

@@ -18,14 +18,18 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
 
     private var movementState: MovementState = .idle
 
-    private var startPosition: CGPoint?
-    private var startBrightness: CGFloat?
-
-    private var currentBrightness: CGFloat = 0
-
     // MARK: - Pinch
 
     private var pinchState: PinchState = .open
+    
+    // MARK: - Recovering
+    
+    private var recoveryPreviousPosition: CGPoint?
+    private var stableRecoveryFrameCount = 0
+    
+    // MARK: - Brightness
+    
+    private var lastSentBrightness: CGFloat?
 
     // MARK: - Outputs
 
@@ -40,12 +44,6 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
         self.onToggle = onToggle
 
         super.init()
-    }
-
-    // MARK: - External synchronization
-
-    func updateCurrentBrightness(_ brightness: CGFloat) {
-        currentBrightness = min(max(brightness, 0), 100)
     }
 
     // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
@@ -101,14 +99,29 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
             return
         }
 
-        let isPinching = processPinch(
+        processPinch(
             indexPosition: indexTip.location,
             thumbPosition: thumbTip.location
         )
 
-        if isPinching {
+        switch pinchState {
+        case .pinched:
+            // Pinch currently active:
+            // brightness gesture must not run.
             cancelMovement()
             return
+            
+        case .recovering:
+            // Fingers were just released.
+            // Wait until the hand becomes stable before allowing slides again.
+            cancelMovement()
+            processRecovery(at: indexTip.location)
+            return
+            
+        case .open:
+            // No pinch interaction is active.
+            // Movement recognition is allowed.
+            break
         }
 
         processMovement(at: indexTip.location)
@@ -157,52 +170,34 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
         switch movementState {
         case .idle:
             if medianMovement > 0.01 {
-                startPosition = currentPosition
-                startBrightness = currentBrightness
-
                 movementState = .moving
             }
 
         case .moving:
-            guard
-                let startPosition,
-                let startBrightness
-            else {
+            // Vision's X coordinate is mirrored compared with
+            // what we see in the front-camera preview.
+            //
+            // Visual left  -> 0%
+            // Visual right -> 100%
+            let brightness = (1 - currentPosition.x) * 100
+            let clampedBrightness = min(max(brightness, 0),100)
+            let roundedBrightness = clampedBrightness.rounded() // rounded to limit writing in HomeKit's data
+            
+            guard roundedBrightness != lastSentBrightness else {
                 return
             }
-
-            let deltaX =
-                currentPosition.x - startPosition.x
-
-            let sensitivity: CGFloat = 100
-
-            let brightnessDelta =
-                deltaX * sensitivity
-
-            let newBrightness =
-                startBrightness + brightnessDelta
-
-            let clampedBrightness =
-                min(max(newBrightness, 0), 100)
-
-            currentBrightness = clampedBrightness
-
-            onBrightnessChanged(clampedBrightness)
+            
+            lastSentBrightness = roundedBrightness
+            onBrightnessChanged(roundedBrightness)
 
             if medianMovement < 0.005 {
                 movementState = .idle
-
-                self.startPosition = nil
-                self.startBrightness = nil
             }
         }
     }
     
     private func cancelMovement() {
         movementState = .idle
-        startPosition = nil
-        startBrightness = nil
-
         recentMovementDistances.removeAll()
         previousPosition = nil
     }
@@ -212,19 +207,12 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
     private func processPinch(
         indexPosition: CGPoint,
         thumbPosition: CGPoint
-    ) -> Bool {
+    ) {
         let deltaX = indexPosition.x - thumbPosition.x
         let deltaY = indexPosition.y - thumbPosition.y
         let distance = hypot(deltaX, deltaY)
 
         handlePinch(distance: distance)
-        switch pinchState {
-        case .open:
-            return false
-
-        case .pinched:
-            return true
-        }
     }
 
     private func handlePinch(
@@ -234,16 +222,45 @@ nonisolated final class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputS
         case .open:
             if distance < 0.015 {
                 pinchState = .pinched
-
-                // Only toggle when entering the pinched state.
-                onToggle()
+                onToggle() // Only toggle when entering the pinched state.
             }
 
         case .pinched:
             if distance > 0.03 {
-                // Rearm without triggering another toggle.
-                pinchState = .open
+                pinchState = .recovering
+                recoveryPreviousPosition = nil
+                stableRecoveryFrameCount = 0
             }
+            
+        case .recovering:
+            break
         }
     }
+    
+    // MARK: - Recovering
+    private func processRecovery(at currentPosition: CGPoint) {
+        guard let previous = recoveryPreviousPosition else {
+            recoveryPreviousPosition = currentPosition
+            return
+        }
+        
+        let deltaX = currentPosition.x - previous.x
+        let deltaY = currentPosition.y - previous.y
+        let distance = hypot(deltaX, deltaY)
+        
+        recoveryPreviousPosition = currentPosition
+        
+        if distance < 0.005 {
+            stableRecoveryFrameCount += 1
+        } else {
+            stableRecoveryFrameCount = 0
+        }
+        
+        if stableRecoveryFrameCount >= 5 {
+            pinchState = .open
+            recoveryPreviousPosition = nil
+            stableRecoveryFrameCount = 0
+        }
+    }
+    
 }

@@ -10,6 +10,7 @@ import Foundation
 enum PinchState {
     case open
     case pinched
+    case recovering
 }
 
 enum MovementState {

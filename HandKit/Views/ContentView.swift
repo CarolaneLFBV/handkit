@@ -15,17 +15,14 @@ struct ContentView: View {
             },
             onToggle: {
                 Task { @MainActor in
-                    lightController.toggle()
+                    do {
+                        try await lightController.toggle()
+                    } catch {
+                        print(error.localizedDescription)
+                    }
                 }
             }
         )
-
-        // When HomeKit finishes reading the real brightness,
-        // synchronize the gesture system with that value.
-        lightController.setBrightnessReadyHandler { brightness in
-            await cameraManager.updateCurrentBrightness(brightness)
-        }
-
         self.lightController = lightController
         self.cameraManager = cameraManager
     }
